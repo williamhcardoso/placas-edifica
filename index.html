@@ -202,6 +202,13 @@
       extra1: { x: 1120, y: 22 },
     };
 
+    /* ==== Posições padrão dos contatos no rodapé (coordenadas da arte) ==== */
+    const RODAPE_POS_PADRAO = {
+      rod_whats: { x: 60,  y: 30 },
+      rod_insta: { x: 470, y: 30 },
+      rod_email: { x: 790, y: 30 },
+    };
+
     /* ==== Blocos da ficha técnica (chave, rótulo do formulário) ==== */
     const INFO_ROWS = [
       ["resp",     "Resp. técnico"],
@@ -464,7 +471,10 @@
       const hHead = d.alturaHead || H_HEAD;
       const hBank = d.showFaixa ? (d.alturaBank || H_BANK) : 0;
       const artH  = alturaArte(d.larguraM, d.alturaM);
-      const hBody = artH - hHead - hBank - H_FOOT;
+      const hFoot = d.alturaFoot || H_FOOT;
+      const hBody = artH - hHead - hBank - hFoot;
+      const posRodape = (id) =>
+        (d.faixaPos && d.faixaPos["rod_" + id]) || RODAPE_POS_PADRAO["rod_" + id] || { x: 60, y: 30 };
 
       /* Divisor vertical que acompanha a logo ao ser arrastada */
       const divisor = d.showDivisores
@@ -636,43 +646,77 @@
               )}
 
               {/* Logos extras */}
-              {(d.extraLogos || []).map((src, i) => (
-                <Draggable key={i} id={"extra" + i} pos={posDe("extra" + i)} scale={scale} editing={editing} onMove={onMovePos}
-                  sizeKey="extraSize" size={d.extraSize} min={24} max={92} onResize={onResize}>
-                  {divisor}
-                  <div style={chip}>
-                    <img src={src} alt={"Logo extra " + (i + 1)}
-                      style={{ height: d.extraSize, width: "auto", objectFit: "contain", display: "block" }} />
-                  </div>
-                </Draggable>
-              ))}
+              {(d.extraLogos || []).map((src, i) => {
+                /* Cada logo extra tem tamanho próprio; extraSize é só o valor de partida */
+                const tam = (d.extraSizes && d.extraSizes[i]) || d.extraSize;
+                return (
+                  <Draggable key={i} id={"extra" + i} pos={posDe("extra" + i)} scale={scale} editing={editing} onMove={onMovePos}
+                    sizeKey={"extra:" + i} size={tam} min={24} max={92} onResize={onResize}>
+                    {divisor}
+                    <div style={chip}>
+                      <img src={src} alt={"Logo extra " + (i + 1)}
+                        style={{ height: tam, width: "auto", objectFit: "contain", display: "block" }} />
+                    </div>
+                  </Draggable>
+                );
+              })}
             </div>
           )}
 
-          {/* ===== 4. RODAPÉ — contatos ===== */}
-          <div style={{
-            flex: 1, background: NAVY, color: "#fff",
-            display: "flex", alignItems: "center", justifyContent: "center", gap: 30, padding: "0 26px",
-          }}>
-            {[
-              [<IconWhats s={26} />, "#25D366", d.whatsapp],
-              [<IconInsta s={26} />, "linear-gradient(45deg,#F9CE34 0%,#EE2A7B 50%,#6228D7 100%)", d.instagram],
-              [<IconMail  s={26} />, "#1D9BF0", d.email],
-            ].filter(([, , txt]) => (txt || "").trim()).map(([icon, bg, txt], i) => (
-              <React.Fragment key={i}>
-                {i > 0 && <div style={{ width: 2, height: 46, background: "rgba(255,255,255,0.45)", flexShrink: 0 }} />}
-                <div style={{ display: "flex", alignItems: "center", gap: 13, minWidth: 0 }}>
-                  <div style={{
-                    width: 46, height: 46, borderRadius: "50%", background: bg, color: "#fff",
-                    display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-                  }}>
-                    {icon}
-                  </div>
-                  <span style={{ fontSize: 25, fontWeight: 500, whiteSpace: "nowrap" }}>{txt}</span>
+          {/* ===== 4. RODAPÉ — contatos =====
+              Todas as medidas derivam de contatoSize, então ícone, círculo e texto
+              crescem juntos pelo slider, pela alça ou pela roda do mouse. */}
+          {(() => {
+            const cs = d.contatoSize || 25;
+            const bola = Math.round(cs * 1.84);
+            const ic   = Math.round(cs * 1.04);
+            const itens = [
+              ["whats", <IconWhats s={ic} />, "#25D366", d.whatsapp],
+              ["insta", <IconInsta s={ic} />, "linear-gradient(45deg,#F9CE34 0%,#EE2A7B 50%,#6228D7 100%)", d.instagram],
+              ["email", <IconMail  s={ic} />, "#1D9BF0", d.email],
+            ].filter(([, , , txt]) => (txt || "").trim());
+
+            const contato = (bg, icon, txt) => (
+              <div style={{ display: "flex", alignItems: "center", gap: Math.round(cs * 0.52), minWidth: 0 }}>
+                <div style={{
+                  width: bola, height: bola, borderRadius: "50%", background: bg, color: "#fff",
+                  display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                }}>
+                  {icon}
                 </div>
-              </React.Fragment>
-            ))}
-          </div>
+                <span style={{ fontSize: cs, fontWeight: 500, whiteSpace: "nowrap" }}>{txt}</span>
+              </div>
+            );
+
+            /* Posição livre: cada contato vira bloco arrastável, como na faixa verde */
+            if (d.rodapeLivre) {
+              return (
+                <div style={{ height: hFoot, background: NAVY, color: "#fff", position: "relative", overflow: "hidden", flexShrink: 0 }}>
+                  {itens.map(([id, icon, bg, txt]) => (
+                    <Draggable key={id} id={"rod_" + id} pos={posRodape(id)} scale={scale} editing={editing} onMove={onMovePos}
+                      sizeKey="contatoSize" size={cs} min={14} max={44} onResize={onResize}>
+                      {contato(bg, icon, txt)}
+                    </Draggable>
+                  ))}
+                </div>
+              );
+            }
+
+            return (
+              <div style={{
+                height: hFoot, background: NAVY, color: "#fff", flexShrink: 0,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                gap: Math.round(cs * 1.2), padding: "0 26px", overflow: "hidden",
+              }}>
+                {itens.map(([id, icon, bg, txt], i) => (
+                  <React.Fragment key={id}>
+                    {i > 0 && <div style={{ width: 2, height: bola, background: "rgba(255,255,255,0.45)", flexShrink: 0 }} />}
+                    {contato(bg, icon, txt)}
+                  </React.Fragment>
+                ))}
+              </div>
+            );
+          })()}
         </div>
       );
     });
@@ -753,6 +797,7 @@
         showFaixa: true,
         logoChip: false,
         extraLogos: [],
+        extraSizes: [],
         rows: { resp: true, area: true, alvara: true, endereco: true },
         titulo: "Construção Residencial",
         tituloSize: 56,
@@ -761,6 +806,9 @@
         alinharFicha: true,
         alturaHead: H_HEAD,
         alturaBank: H_BANK,
+        alturaFoot: H_FOOT,
+        contatoSize: 25,
+        rodapeLivre: false,
         larguraM: 1.2,
         alturaM: 0.8,
         dpi: 150,
@@ -931,11 +979,21 @@
           const r = new FileReader();
           r.onload = () => res(r.result);
           r.readAsDataURL(f);
-        }))).then((uris) => setD((s) => ({ ...s, extraLogos: [...(s.extraLogos || []), ...uris] })));
+        }))).then((uris) => setD((s) => ({
+          ...s,
+          extraLogos: [...(s.extraLogos || []), ...uris],
+          extraSizes: [...(s.extraSizes || []), ...uris.map(() => s.extraSize)],
+        })));
         e.target.value = "";
       };
 
-      const removeLogo = (i) => setD((s) => ({ ...s, extraLogos: s.extraLogos.filter((_, k) => k !== i) }));
+      /* O tamanho sai junto com a logo, senão os índices se deslocam
+         e as logos restantes mudam de tamanho sozinhas. */
+      const removeLogo = (i) => setD((s) => ({
+        ...s,
+        extraLogos: s.extraLogos.filter((_, k) => k !== i),
+        extraSizes: (s.extraSizes || []).filter((_, k) => k !== i),
+      }));
 
       /* Posicionamento livre dos itens da faixa verde */
       const movePos = useCallback((id, p) => {
@@ -944,6 +1002,16 @@
 
       /* Redimensionamento pela alça / roda do mouse — escreve no mesmo campo dos sliders */
       const onResize = useCallback((k, v) => {
+        /* "extra:<i>" endereça uma logo extra específica; o resto é campo direto */
+        if (typeof k === "string" && k.startsWith("extra:")) {
+          const i = Number(k.slice(6));
+          return setD((s) => {
+            const arr = (s.extraLogos || []).map((_, j) =>
+              (s.extraSizes && s.extraSizes[j]) || s.extraSize);
+            arr[i] = v;
+            return { ...s, extraSizes: arr };
+          });
+        }
         setD((s) => ({ ...s, [k]: v }));
       }, []);
 
@@ -955,7 +1023,7 @@
 
       /* Altura restante para o corpo — usada nos avisos do painel */
       const artH   = alturaArte(d.larguraM, d.alturaM);
-      const corpoH = artH - d.alturaHead - (d.showFaixa ? d.alturaBank : 0) - H_FOOT;
+      const corpoH = artH - d.alturaHead - (d.showFaixa ? d.alturaBank : 0) - d.alturaFoot;
 
       /* Resolução final da exportação no DPI escolhido */
       const ratio  = ratioDpi(d.larguraM, d.dpi);
@@ -965,8 +1033,9 @@
 
       const resetPos = () => setD((s) => ({
         ...s,
-        faixaPos: { ...FAIXA_POS_PADRAO },
-        textoFaixaSize: 27, fgtsSize: 62, caixaSize: 54, extraSize: 56,
+        faixaPos: { ...FAIXA_POS_PADRAO, ...RODAPE_POS_PADRAO },
+        textoFaixaSize: 27, fgtsSize: 62, caixaSize: 54, extraSize: 56, contatoSize: 25,
+        extraSizes: (s.extraLogos || []).map(() => 56),
       }));
 
       /* Escala responsiva do preview mantendo a arte em 1200x800 reais */
@@ -1406,7 +1475,7 @@
                           ["textoFaixaSize", "Texto", 16, 42, 1],
                           ["fgtsSize", "Logo FGTS", 24, 92, 1],
                           ["caixaSize", "Logo CAIXA", 24, 92, 1],
-                        ].concat((d.extraLogos || []).length ? [["extraSize", "Logos extras", 24, 92, 1]] : []).map(([k, txt, mn, mx, st]) => (
+                        ].map(([k, txt, mn, mx, st]) => (
                           <label key={k} className="block">
                             <span className="block text-[12px] font-medium text-slate-600 mb-0.5">{txt} — {d[k]} px</span>
                             <input type="range" min={mn} max={mx} step={st} value={d[k]}
@@ -1414,6 +1483,25 @@
                               className="w-full accent-slate-900 cursor-pointer" />
                           </label>
                         ))}
+
+                        {/* Uma linha por logo extra — tamanho independente */}
+                        {(d.extraLogos || []).map((src, i) => {
+                          const tam = (d.extraSizes && d.extraSizes[i]) || d.extraSize;
+                          return (
+                            <div key={i} className="flex items-center gap-2">
+                              <img src={src} alt={"extra " + (i + 1)}
+                                className="h-8 w-8 shrink-0 rounded border border-slate-300 bg-white object-contain" />
+                              <label className="block flex-1 min-w-0">
+                                <span className="block text-[12px] font-medium text-slate-600 mb-0.5">
+                                  Logo extra {i + 1} — {tam} px
+                                </span>
+                                <input type="range" min="24" max="92" step="1" value={tam}
+                                  onChange={(e) => onResize("extra:" + i, Number(e.target.value))}
+                                  className="w-full accent-slate-900 cursor-pointer" />
+                              </label>
+                            </div>
+                          );
+                        })}
                       </div>
 
                       <label className="flex items-center gap-2 text-[13px] text-slate-700 cursor-pointer select-none">
@@ -1491,6 +1579,35 @@
               <Secao id="contatos" icone="📞" titulo="Contatos e arquivo"
                 resumo={[d.whatsapp, d.instagram].filter(Boolean).join(" · ")}
                 aberta={!!abertas.contatos} onToggle={toggleSec}>
+                {/* Dimensões da faixa azul */}
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-3">
+                  <label className="block">
+                    <span className="block text-[12px] font-medium text-slate-600 mb-1">Altura da faixa — {d.alturaFoot} px</span>
+                    <input type="range" min="60" max="200" step="2" value={d.alturaFoot}
+                      onChange={(e) => setD((s) => ({ ...s, alturaFoot: Number(e.target.value) }))}
+                      className="w-full accent-slate-900 cursor-pointer" />
+                  </label>
+                  <label className="block">
+                    <span className="block text-[12px] font-medium text-slate-600 mb-1">Tamanho dos contatos — {d.contatoSize} px</span>
+                    <input type="range" min="14" max="44" step="1" value={d.contatoSize}
+                      onChange={(e) => setD((s) => ({ ...s, contatoSize: Number(e.target.value) }))}
+                      className="w-full accent-slate-900 cursor-pointer" />
+                    <span className="block text-[11px] text-slate-400 mt-1">Ícone, círculo e texto crescem juntos.</span>
+                  </label>
+                  <label className={"flex items-center gap-2 text-[12px] cursor-pointer select-none pt-2 border-t border-slate-200 " +
+                    (d.rodapeLivre ? "text-orange-700 font-semibold" : "text-slate-700")}>
+                    <input type="checkbox" checked={d.rodapeLivre} onChange={() => toggle("rodapeLivre")}
+                      className="h-4 w-4 rounded border-slate-300 accent-orange-600 cursor-pointer" />
+                    Posição livre dos contatos
+                  </label>
+                  {d.rodapeLivre && (
+                    <p className="text-[11px] text-slate-500 leading-snug">
+                      Ligue também o <strong>modo livre</strong> (seção Faixa de financiamento) para arrastar e
+                      redimensionar cada contato no preview. Desligue aqui para voltar ao alinhamento automático.
+                    </p>
+                  )}
+                </div>
+
                 <Field label="WhatsApp">
                   <input className={inputCls} value={d.whatsapp} onChange={set("whatsapp")} />
                 </Field>
