@@ -4,6 +4,17 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gerador de Placas de Obra — Edifica MT</title>
+  <script>
+    /* O GitHub Pages não fala com a API: quem salvasse por lá acabaria com a placa
+       presa naquele navegador. Então ele manda todo mundo para o endereço de
+       verdade. `?local=1` escapa do desvio, para o caso de o VPS estar fora do ar
+       e a versão em localStorage ser a única saída. */
+    (function () {
+      var noPages = location.hostname.indexOf("github.io") !== -1;
+      var querLocal = location.search.indexOf("local=1") !== -1;
+      if (noPages && !querLocal) location.replace("https://147.93.136.178/placas/");
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Montserrat:wght@400;500;600;700;800&family=Poppins:wght@400;500;600;700;800&family=Roboto:wght@400;500;700;900&family=Roboto+Condensed:wght@400;500;700&family=Oswald:wght@400;500;600;700&family=Barlow:wght@400;500;600;700;800&family=Archivo:wght@400;500;600;700;800&family=Lato:wght@400;700;900&family=Open+Sans:wght@400;600;700;800&family=Bebas+Neue&family=Anton&display=swap" rel="stylesheet" />
@@ -819,6 +830,32 @@
 
     const novoId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
+    /* Fila de emergência: o que não conseguiu subir ao servidor fica guardado aqui
+       neste navegador e é reenviado sozinho no próximo acesso com conexão boa. */
+    const LS_PENDENTES = "placas_edifica_pendentes";
+
+    const lerPendentes = () => {
+      try {
+        const arr = JSON.parse(localStorage.getItem(LS_PENDENTES) || "[]");
+        return Array.isArray(arr) ? arr : [];
+      } catch (e) {
+        return [];
+      }
+    };
+
+    const guardarPendente = (registro) => {
+      if (!registro) return false;
+      try {
+        const fila = lerPendentes().filter((p) => p.id !== registro.id);
+        fila.push(registro);
+        localStorage.setItem(LS_PENDENTES, JSON.stringify(fila));
+        return true;
+      } catch (e) {
+        console.error("Fila de emergência cheia:", e);
+        return false;
+      }
+    };
+
     /* Reduz a fachada antes de gravar — o localStorage tem ~5 MB e uma foto
        em base64 sozinha consome mais de 1 MB. 1600 px cobrem a resolução
        necessária na exportação; a imagem em tela continua sendo a original. */
@@ -938,13 +975,28 @@
         if (gravarPlacas(lista)) setPlacas(lista);
       };
 
-      const tratarFalha = (e, msg) => {
+      /* Falha ao gravar não pode passar despercebida: um aviso que some sozinho
+         faria o usuário achar que salvou. Daí o alert, que exige clique. */
+      const tratarFalha = (e, msg, registro) => {
         if (String(e.message) === "401") {
           api.sair();
           setSync({ modo: "local", pedindoSenha: true, erro: "Sessão expirada — entre novamente.", ocupado: false });
-        } else {
-          flash(msg);
+          return;
         }
+        if (!registro) {           /* exclusão: não há nada a enfileirar */
+          window.alert(msg + "\n\nTente de novo em instantes.");
+          return;
+        }
+        const guardado = guardarPendente(registro);
+        window.alert(
+          msg + "\n\n" +
+          (guardado
+            ? "Sua placa NÃO se perdeu: ficou guardada neste navegador e será enviada " +
+              "sozinha assim que você abrir o app de novo com a conexão funcionando. " +
+              "Não limpe os dados do navegador até lá."
+            : "Não foi possível nem guardar uma cópia aqui. Exporte suas placas para " +
+              ".json agora, antes de fechar a página.")
+        );
       };
 
       /* Grava um registro onde ele mora e reflete a lista nova na tela */
@@ -954,12 +1006,30 @@
           await api.gravar(registro);
           setPlacas(lista);
         } catch (e) {
-          tratarFalha(e, "Não foi possível salvar no servidor.");
+          setPlacas(lista);   /* a placa continua na tela; a fila cuida do envio */
+          tratarFalha(e, "Não foi possível salvar no servidor.", registro);
         }
       };
 
       const carregarDoServidor = useCallback(async () => {
         try {
+          /* Primeiro sobe o que ficou preso em algum acesso sem conexão */
+          const fila = lerPendentes();
+          if (fila.length) {
+            const presos = [];
+            for (const p of fila) {
+              try {
+                await api.gravar(p);
+              } catch (err) {
+                if (String(err.message) === "401") throw err;
+                presos.push(p);
+              }
+            }
+            localStorage.setItem(LS_PENDENTES, JSON.stringify(presos));
+            if (presos.length < fila.length) {
+              window.setTimeout(() => flash((fila.length - presos.length) + " placa(s) pendente(s) enviada(s) ao servidor."), 400);
+            }
+          }
           const lista = await api.listar();
           setPlacas(Array.isArray(lista) ? lista : []);
           setSync({ modo: "servidor", pedindoSenha: false, erro: "", ocupado: false });
