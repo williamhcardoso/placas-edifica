@@ -1,0 +1,8 @@
+# Credenciais do VPS em texto claro — nunca vai para o repositório (que é público)
+server/vps.py
+
+# Banco e artefatos locais
+server/placas.db
+server/static/
+__pycache__/
+*.pyc

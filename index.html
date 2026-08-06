@@ -722,6 +722,73 @@
     });
 
     /* ==== APP ==== */
+    /* ==== Sincronização com o servidor ====
+       Servido pelo VPS, as placas ficam na API e aparecem em qualquer aparelho.
+       Aberto de outra origem (GitHub Pages, arquivo local), o app cai no
+       localStorage automaticamente — o mesmo index.html serve aos dois casos. */
+    const TOKEN_KEY = "placas_edifica_token";
+
+    const api = {
+      ativo: false,
+      token: localStorage.getItem(TOKEN_KEY) || "",
+
+      async detectar() {
+        try {
+          const r = await fetch("api/health", { cache: "no-store" });
+          this.ativo = r.ok && (await r.json()).app === "placas-edifica";
+        } catch (e) {
+          this.ativo = false;
+        }
+        return this.ativo;
+      },
+
+      cab() {
+        return { "Content-Type": "application/json", Authorization: "Bearer " + this.token };
+      },
+
+      async login(senha) {
+        const r = await fetch("api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ senha }),
+        });
+        if (!r.ok) throw new Error("senha");
+        this.token = (await r.json()).token;
+        localStorage.setItem(TOKEN_KEY, this.token);
+        return this.token;
+      },
+
+      sair() {
+        this.token = "";
+        localStorage.removeItem(TOKEN_KEY);
+      },
+
+      async listar() {
+        const r = await fetch("api/placas", { headers: this.cab(), cache: "no-store" });
+        if (r.status === 401) throw new Error("401");
+        if (!r.ok) throw new Error("falha ao listar");
+        return r.json();
+      },
+
+      async gravar(p) {
+        const r = await fetch("api/placas/" + encodeURIComponent(p.id), {
+          method: "PUT", headers: this.cab(), body: JSON.stringify(p),
+        });
+        if (r.status === 401) throw new Error("401");
+        if (!r.ok) throw new Error("falha ao gravar");
+        return r.json();
+      },
+
+      async excluir(id) {
+        const r = await fetch("api/placas/" + encodeURIComponent(id), {
+          method: "DELETE", headers: this.cab(),
+        });
+        if (r.status === 401) throw new Error("401");
+        if (!r.ok) throw new Error("falha ao excluir");
+        return r.json();
+      },
+    };
+
     /* ==== Biblioteca de placas salvas (localStorage) ==== */
     const LS_KEY = "placas_edifica_v1";
 
@@ -853,6 +920,13 @@
       const [aviso, setAviso] = useState("");
       const importRef = useRef(null);
 
+      /* Sincronização: "servidor" quando o app é servido pelo VPS e a senha foi
+         aceita; "local" em qualquer outro caso (GitHub Pages, arquivo aberto
+         direto), quando tudo continua no localStorage como sempre. */
+      const [sync, setSync] = useState({ modo: "local", pedindoSenha: false, erro: "", ocupado: false });
+      const [senhaCampo, setSenhaCampo] = useState("");
+      const naNuvem = sync.modo === "servidor";
+
       const alterado = salvo !== null && salvo !== JSON.stringify(d);
 
       const flash = (msg) => {
@@ -862,6 +936,77 @@
 
       const persistir = (lista) => {
         if (gravarPlacas(lista)) setPlacas(lista);
+      };
+
+      const tratarFalha = (e, msg) => {
+        if (String(e.message) === "401") {
+          api.sair();
+          setSync({ modo: "local", pedindoSenha: true, erro: "Sessão expirada — entre novamente.", ocupado: false });
+        } else {
+          flash(msg);
+        }
+      };
+
+      /* Grava um registro onde ele mora e reflete a lista nova na tela */
+      const guardar = async (registro, lista) => {
+        if (!naNuvem) return persistir(lista);
+        try {
+          await api.gravar(registro);
+          setPlacas(lista);
+        } catch (e) {
+          tratarFalha(e, "Não foi possível salvar no servidor.");
+        }
+      };
+
+      const carregarDoServidor = useCallback(async () => {
+        try {
+          const lista = await api.listar();
+          setPlacas(Array.isArray(lista) ? lista : []);
+          setSync({ modo: "servidor", pedindoSenha: false, erro: "", ocupado: false });
+          return true;
+        } catch (e) {
+          if (String(e.message) === "401") {
+            api.sair();
+            setSync({ modo: "local", pedindoSenha: true, erro: "", ocupado: false });
+          } else {
+            setSync((s) => ({ ...s, erro: "Não foi possível carregar as placas do servidor." }));
+          }
+          return false;
+        }
+      }, []);
+
+      useEffect(() => {
+        let vivo = true;
+        (async () => {
+          const servido = await api.detectar();
+          if (!vivo || !servido) return;      /* sem API: segue no localStorage */
+          if (api.token && (await carregarDoServidor())) return;
+          if (vivo) setSync((s) => ({ ...s, pedindoSenha: true }));
+        })();
+        return () => { vivo = false; };
+      }, [carregarDoServidor]);
+
+      const entrar = async (e) => {
+        if (e) e.preventDefault();
+        setSync((s) => ({ ...s, ocupado: true, erro: "" }));
+        try {
+          await api.login(senhaCampo);
+          setSenhaCampo("");
+          await carregarDoServidor();
+        } catch (err) {
+          setSync((s) => ({ ...s, erro: "Senha inválida." }));
+        } finally {
+          setSync((s) => ({ ...s, ocupado: false }));
+        }
+      };
+
+      const sair = () => {
+        api.sair();
+        setPlacas([]);
+        setAbertaId(null);
+        setNomePlaca("");
+        setSalvo(null);
+        setSync({ modo: "local", pedindoSenha: true, erro: "", ocupado: false });
       };
 
       /* Grava a placa atual: atualiza a aberta ou cria um registro novo */
@@ -877,17 +1022,17 @@
         const agora = new Date().toISOString();
 
         if (!comoNova && abertaId) {
-          const lista = placas.map((p) =>
-            p.id === abertaId ? { ...p, nome: titulo, dados, atualizadoEm: agora } : p);
-          persistir(lista);
+          const atual = placas.find((p) => p.id === abertaId);
+          const reg = { ...atual, id: abertaId, nome: titulo, dados, atualizadoEm: agora };
+          await guardar(reg, placas.map((p) => (p.id === abertaId ? reg : p)));
           setNomePlaca(titulo);
-          flash("Placa atualizada.");
+          flash(naNuvem ? "Placa atualizada no servidor." : "Placa atualizada.");
         } else {
-          const id = novoId();
-          persistir([{ id, nome: titulo, criadoEm: agora, atualizadoEm: agora, dados }, ...placas]);
-          setAbertaId(id);
+          const reg = { id: novoId(), nome: titulo, criadoEm: agora, atualizadoEm: agora, dados };
+          await guardar(reg, [reg, ...placas]);
+          setAbertaId(reg.id);
           setNomePlaca(titulo);
-          flash("Placa salva na biblioteca.");
+          flash(naNuvem ? "Placa salva no servidor." : "Placa salva na biblioteca.");
         }
         setSalvo(JSON.stringify(d));
       };
@@ -901,23 +1046,36 @@
         flash("Placa \"" + p.nome + "\" carregada.");
       };
 
-      const renomearPlaca = (id, nome) => {
+      const renomearPlaca = async (id, nome) => {
         const titulo = (nome || "").trim();
-        if (!titulo) return;
-        persistir(placas.map((p) => (p.id === id ? { ...p, nome: titulo } : p)));
-        if (id === abertaId) setNomePlaca(titulo);
+        const alvo = placas.find((p) => p.id === id);
+        if (!titulo || !alvo) return;
+        const reg = { ...alvo, nome: titulo };
         setRenomeando(null);
+        await guardar(reg, placas.map((p) => (p.id === id ? reg : p)));
+        if (id === abertaId) setNomePlaca(titulo);
       };
 
-      const duplicarPlaca = (p) => {
+      const duplicarPlaca = async (p) => {
         const agora = new Date().toISOString();
-        persistir([{ ...p, id: novoId(), nome: p.nome + " (cópia)", criadoEm: agora, atualizadoEm: agora }, ...placas]);
+        const reg = { ...p, id: novoId(), nome: p.nome + " (cópia)", criadoEm: agora, atualizadoEm: agora };
+        await guardar(reg, [reg, ...placas]);
         flash("Cópia criada.");
       };
 
-      const excluirPlaca = (p) => {
+      const excluirPlaca = async (p) => {
         if (!window.confirm('Excluir a placa "' + p.nome + '"? Esta ação não pode ser desfeita.')) return;
-        persistir(placas.filter((x) => x.id !== p.id));
+        const lista = placas.filter((x) => x.id !== p.id);
+        if (naNuvem) {
+          try {
+            await api.excluir(p.id);
+            setPlacas(lista);
+          } catch (e) {
+            return tratarFalha(e, "Não foi possível excluir no servidor.");
+          }
+        } else {
+          persistir(lista);
+        }
         if (p.id === abertaId) { setAbertaId(null); setNomePlaca(""); setSalvo(null); }
       };
 
@@ -936,7 +1094,7 @@
         e.target.value = "";
         if (!file) return;
         const r = new FileReader();
-        r.onload = () => {
+        r.onload = async () => {
           try {
             const obj = JSON.parse(r.result);
             const novas = Array.isArray(obj) ? obj : obj.placas;
@@ -946,7 +1104,16 @@
             const limpas = novas
               .filter((p) => p && p.dados)
               .map((p) => (existentes.has(p.id) ? { ...p, id: novoId(), nome: p.nome + " (importada)" } : p));
-            persistir([...limpas, ...placas]);
+            if (naNuvem) {
+              try {
+                for (const p of limpas) await api.gravar(p);
+                setPlacas([...limpas, ...placas]);
+              } catch (e2) {
+                return tratarFalha(e2, "Falha ao enviar as placas importadas ao servidor.");
+              }
+            } else {
+              persistir([...limpas, ...placas]);
+            }
             flash(limpas.length + " placa(s) importada(s).");
           } catch (err) {
             alert("Arquivo inválido — esperado um .json exportado por este app.");
@@ -1081,6 +1248,29 @@
 
       return (
         <div className="min-h-screen">
+          {/* Senha — só aparece quando o app está sendo servido pelo VPS */}
+          {sync.pedindoSenha && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-6">
+              <form onSubmit={entrar} className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
+                <h2 className="text-base font-extrabold text-slate-900">Placas Edifica MT</h2>
+                <p className="mt-1 text-[12px] text-slate-500">
+                  Digite a senha para acessar as placas salvas no servidor.
+                </p>
+                <input type="password" autoFocus value={senhaCampo} placeholder="Senha"
+                  onChange={(e) => setSenhaCampo(e.target.value)} className={inputCls + " mt-4"} />
+                {sync.erro && <p className="mt-2 text-[11px] font-semibold text-red-600">{sync.erro}</p>}
+                <button type="submit" disabled={sync.ocupado || !senhaCampo}
+                  className="mt-4 w-full rounded-lg bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-slate-700 transition disabled:opacity-40">
+                  {sync.ocupado ? "Entrando…" : "Entrar"}
+                </button>
+                <button type="button" onClick={() => setSync((s) => ({ ...s, pedindoSenha: false, erro: "" }))}
+                  className="mt-2 w-full text-[11px] font-semibold text-slate-400 hover:text-slate-700 transition">
+                  Continuar sem sincronizar (salva só neste navegador)
+                </button>
+              </form>
+            </div>
+          )}
+
           {/* Topo */}
           <header className="border-b border-slate-200 bg-white">
             <div className="mx-auto max-w-7xl px-6 py-4 flex items-center gap-3">
@@ -1142,6 +1332,19 @@
               <Secao id="biblioteca" icone="💾" titulo="Minhas placas"
                 resumo={placas.length ? placas.length + " salva(s)" : "Nenhuma placa salva ainda"}
                 aberta={!!abertas.biblioteca} onToggle={toggleSec}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className={"inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold " +
+                    (naNuvem ? "border border-emerald-300 bg-emerald-50 text-emerald-700"
+                             : "border border-slate-300 bg-slate-50 text-slate-600")}>
+                    {naNuvem ? "☁ Sincronizado" : "💾 Neste navegador"}
+                  </span>
+                  {naNuvem && (
+                    <button type="button" onClick={sair}
+                      className="text-[11px] font-semibold text-slate-400 hover:text-slate-700 transition">
+                      Sair
+                    </button>
+                  )}
+                </div>
                 {placas.length === 0 ? (
                   <p className="text-[12px] text-slate-500">
                     Nenhuma placa salva. Use <strong>Salvar como nova</strong> acima para guardar a configuração atual.
@@ -1205,8 +1408,9 @@
                   <input ref={importRef} type="file" accept=".json,application/json" onChange={importarBiblioteca} className="hidden" />
                 </div>
                 <p className="text-[11px] text-slate-400">
-                  As placas ficam neste navegador. Exporte o .json para levá-las a outro dispositivo.
-                  A fachada é comprimida (máx. 1600 px) ao salvar, para caber no armazenamento local.
+                  {naNuvem
+                    ? "As placas ficam no servidor e aparecem em qualquer aparelho com a mesma senha. A fachada é comprimida (máx. 1600 px) ao salvar."
+                    : "As placas ficam neste navegador. Exporte o .json para levá-las a outro dispositivo. A fachada é comprimida (máx. 1600 px) ao salvar, para caber no armazenamento local."}
                 </p>
               </Secao>
 
